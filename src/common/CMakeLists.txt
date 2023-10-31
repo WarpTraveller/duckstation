@@ -38,6 +38,8 @@ add_library(common
   minizip_helpers.cpp
   minizip_helpers.h
   path.h
+  perf_scope.cpp
+  perf_scope.h
   progress_callback.cpp
   progress_callback.h
   rectangle.h
@@ -60,8 +62,8 @@ add_library(common
 
 target_include_directories(common PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
 target_include_directories(common PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/..")
-target_link_libraries(common PUBLIC fmt Threads::Threads vulkan-headers fast_float)
-target_link_libraries(common PRIVATE stb libchdr zlib minizip Zstd::Zstd "${CMAKE_DL_LIBS}")
+target_link_libraries(common PUBLIC fmt Threads::Threads fast_float)
+target_link_libraries(common PRIVATE stb zlib minizip Zstd::Zstd "${CMAKE_DL_LIBS}")
 
 if(WIN32)
   target_sources(common PRIVATE

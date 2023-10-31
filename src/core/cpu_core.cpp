@@ -7,6 +7,7 @@
 #include "common/fastjmp.h"
 #include "common/file_system.h"
 #include "common/log.h"
+#include "cpu_code_cache_private.h"
 #include "cpu_core_private.h"
 #include "cpu_disasm.h"
 #include "cpu_recompiler_thunks.h"
@@ -2230,6 +2231,7 @@ void CPU::Execute()
   {
     case CPUExecutionMode::Recompiler:
     case CPUExecutionMode::CachedInterpreter:
+    case CPUExecutionMode::NewRec:
       CodeCache::Execute();
       break;
 
@@ -2262,20 +2264,24 @@ void CPU::SingleStep()
 }
 
 template<PGXPMode pgxp_mode>
-void CPU::CodeCache::InterpretCachedBlock(const CodeBlock& block)
+void CPU::CodeCache::InterpretCachedBlock(const Block* block)
 {
   // set up the state so we've already fetched the instruction
-  DebugAssert(g_state.pc == block.GetPC());
-  g_state.npc = block.GetPC() + 4;
+  DebugAssert(g_state.pc == block->pc);
+  g_state.npc = block->pc + 4;
 
-  for (const CodeBlockInstruction& cbi : block.instructions)
+  const Instruction* instruction = block->Instructions();
+  const Instruction* end_instruction = instruction + block->size;
+  const CodeCache::InstructionInfo* info = block->InstructionsInfo();
+
+  do
   {
     g_state.pending_ticks++;
 
     // now executing the instruction we previously fetched
-    g_state.current_instruction.bits = cbi.instruction.bits;
-    g_state.current_instruction_pc = cbi.pc;
-    g_state.current_instruction_in_branch_delay_slot = cbi.is_branch_delay_slot;
+    g_state.current_instruction.bits = instruction->bits;
+    g_state.current_instruction_pc = info->pc;
+    g_state.current_instruction_in_branch_delay_slot = info->is_branch_delay_slot; // TODO: let int set it instead
     g_state.current_instruction_was_branch_taken = g_state.branch_was_taken;
     g_state.branch_was_taken = false;
     g_state.exception_raised = false;
@@ -2292,15 +2298,18 @@ void CPU::CodeCache::InterpretCachedBlock(const CodeBlock& block)
 
     if (g_state.exception_raised)
       break;
-  }
+
+    instruction++;
+    info++;
+  } while (instruction != end_instruction);
 
   // cleanup so the interpreter can kick in if needed
   g_state.next_instruction_is_branch_delay_slot = false;
 }
 
-template void CPU::CodeCache::InterpretCachedBlock<PGXPMode::Disabled>(const CodeBlock& block);
-template void CPU::CodeCache::InterpretCachedBlock<PGXPMode::Memory>(const CodeBlock& block);
-template void CPU::CodeCache::InterpretCachedBlock<PGXPMode::CPU>(const CodeBlock& block);
+template void CPU::CodeCache::InterpretCachedBlock<PGXPMode::Disabled>(const Block* block);
+template void CPU::CodeCache::InterpretCachedBlock<PGXPMode::Memory>(const Block* block);
+template void CPU::CodeCache::InterpretCachedBlock<PGXPMode::CPU>(const Block* block);
 
 template<PGXPMode pgxp_mode>
 void CPU::CodeCache::InterpretUncachedBlock()
@@ -2388,7 +2397,7 @@ ALWAYS_INLINE_RELEASE Bus::MemoryWriteHandler CPU::GetMemoryWriteHandler(Virtual
 void CPU::UpdateMemoryPointers()
 {
   g_state.memory_handlers = Bus::GetMemoryHandlers(g_state.cop0_regs.sr.Isc, g_state.cop0_regs.sr.Swc);
-  g_state.fastmem_base = g_state.cop0_regs.sr.Isc ? nullptr : Bus::GetFastmemBase();
+  g_state.fastmem_base = Bus::GetFastmemBase(g_state.cop0_regs.sr.Isc);
 }
 
 void CPU::ExecutionModeChanged()
@@ -2732,17 +2741,17 @@ ALWAYS_INLINE bool CPU::DoSafeMemoryAccess(VirtualMemoryAddress address, u32& va
     {
       if constexpr (size == MemoryAccessSize::Byte)
       {
-        value = g_ram[offset];
+        value = g_unprotected_ram[offset];
       }
       else if constexpr (size == MemoryAccessSize::HalfWord)
       {
         u16 temp;
-        std::memcpy(&temp, &g_ram[offset], sizeof(temp));
+        std::memcpy(&temp, &g_unprotected_ram[offset], sizeof(temp));
         value = ZeroExtend32(temp);
       }
       else if constexpr (size == MemoryAccessSize::Word)
       {
-        std::memcpy(&value, &g_ram[offset], sizeof(u32));
+        std::memcpy(&value, &g_unprotected_ram[offset], sizeof(u32));
       }
     }
     else
@@ -2751,9 +2760,9 @@ ALWAYS_INLINE bool CPU::DoSafeMemoryAccess(VirtualMemoryAddress address, u32& va
 
       if constexpr (size == MemoryAccessSize::Byte)
       {
-        if (g_ram[offset] != Truncate8(value))
+        if (g_unprotected_ram[offset] != Truncate8(value))
         {
-          g_ram[offset] = Truncate8(value);
+          g_unprotected_ram[offset] = Truncate8(value);
           if (g_ram_code_bits[page_index])
             CPU::CodeCache::InvalidateBlocksWithPageIndex(page_index);
         }
@@ -2762,10 +2771,10 @@ ALWAYS_INLINE bool CPU::DoSafeMemoryAccess(VirtualMemoryAddress address, u32& va
       {
         const u16 new_value = Truncate16(value);
         u16 old_value;
-        std::memcpy(&old_value, &g_ram[offset], sizeof(old_value));
+        std::memcpy(&old_value, &g_unprotected_ram[offset], sizeof(old_value));
         if (old_value != new_value)
         {
-          std::memcpy(&g_ram[offset], &new_value, sizeof(u16));
+          std::memcpy(&g_unprotected_ram[offset], &new_value, sizeof(u16));
           if (g_ram_code_bits[page_index])
             CPU::CodeCache::InvalidateBlocksWithPageIndex(page_index);
         }
@@ -2773,10 +2782,10 @@ ALWAYS_INLINE bool CPU::DoSafeMemoryAccess(VirtualMemoryAddress address, u32& va
       else if constexpr (size == MemoryAccessSize::Word)
       {
         u32 old_value;
-        std::memcpy(&old_value, &g_ram[offset], sizeof(u32));
+        std::memcpy(&old_value, &g_unprotected_ram[offset], sizeof(u32));
         if (old_value != value)
         {
-          std::memcpy(&g_ram[offset], &value, sizeof(u32));
+          std::memcpy(&g_unprotected_ram[offset], &value, sizeof(u32));
           if (g_ram_code_bits[page_index])
             CPU::CodeCache::InvalidateBlocksWithPageIndex(page_index);
         }
@@ -2947,11 +2956,8 @@ void* CPU::GetDirectWriteMemoryPointer(VirtualMemoryAddress address, MemoryAcces
 
   const PhysicalMemoryAddress paddr = address & PHYSICAL_MEMORY_ADDRESS_MASK;
 
-#if 0
-  // Not enabled until we can protect code regions.
   if (paddr < RAM_MIRROR_END)
-    return &g_ram[paddr & RAM_MASK];
-#endif
+    return &g_ram[paddr & g_ram_mask];
 
   if ((paddr & DCACHE_LOCATION_MASK) == DCACHE_LOCATION)
     return &g_state.dcache[paddr & DCACHE_OFFSET_MASK];
@@ -2989,6 +2995,8 @@ static void MemoryBreakpoint(MemoryAccessType type, MemoryAccessSize size, Virtu
   static constexpr const char* types[2] = { "read", "write" };
 
   const u32 cycle = TimingEvents::GetGlobalTickCounter() + CPU::g_state.pending_ticks;
+  if (cycle == 3301006373)
+    __debugbreak();
 
 #if 0
   static std::FILE* fp = nullptr;

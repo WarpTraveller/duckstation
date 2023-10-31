@@ -171,6 +171,9 @@ elseif("${CMAKE_SYSTEM_PROCESSOR}" STREQUAL "arm" OR "${CMAKE_SYSTEM_PROCESSOR}"
   endif()
 elseif("${CMAKE_SYSTEM_PROCESSOR}" STREQUAL "riscv64")
   set(CPU_ARCH "riscv64")
+
+  # Not done for us. Or we should inline atomics?
+  link_libraries("-latomic")
 else()
   message(FATAL_ERROR "Unknown system processor: ${CMAKE_SYSTEM_PROCESSOR}")
 endif()
