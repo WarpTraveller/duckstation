@@ -15,6 +15,7 @@
 static const Controller::ControllerInfo s_none_info = {ControllerType::None,
                                                        "None",
                                                        TRANSLATE_NOOP("ControllerType", "Not Connected"),
+                                                       nullptr,
                                                        {},
                                                        {},
                                                        Controller::VibrationCapabilities::NoVibration};
@@ -137,7 +138,7 @@ std::vector<std::pair<std::string, std::string>> Controller::GetControllerTypeNa
 {
   std::vector<std::pair<std::string, std::string>> ret;
   for (const ControllerInfo* info : s_controller_info)
-    ret.emplace_back(info->name, info->display_name);
+    ret.emplace_back(info->name, Host::TranslateToString("ControllerType", info->display_name));
 
   return ret;
 }

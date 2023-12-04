@@ -55,9 +55,9 @@ set(SRCS
   controllerledsettingsdialog.ui
   controllermacroeditwidget.ui
   controllermacrowidget.ui
-  controllersettingsdialog.cpp
-  controllersettingsdialog.h
-  controllersettingsdialog.ui
+  controllersettingswindow.cpp
+  controllersettingswindow.h
+  controllersettingswindow.ui
   controllersettingwidgetbinder.h
   coverdownloaddialog.cpp
   coverdownloaddialog.h
@@ -116,9 +116,9 @@ set(SRCS
   mainwindow.cpp
   mainwindow.h
   mainwindow.ui
-  memorycardeditordialog.cpp
-  memorycardeditordialog.h
-  memorycardeditordialog.ui
+  memorycardeditorwindow.cpp
+  memorycardeditorwindow.h
+  memorycardeditorwindow.ui
   memorycardsettingswidget.cpp
   memorycardsettingswidget.h
   memoryviewwidget.cpp
@@ -135,9 +135,9 @@ set(SRCS
   qtutils.cpp
   qtutils.h
   resource.h
-  settingsdialog.cpp
-  settingsdialog.h
-  settingsdialog.ui
+  settingswindow.cpp
+  settingswindow.h
+  settingswindow.ui
   settingwidgetbinder.h
   setupwizarddialog.cpp
   setupwizarddialog.h

@@ -18,6 +18,8 @@
 #include "context_wgl.h"
 #elif defined(__APPLE__)
 #include "context_agl.h"
+#elif defined(__ANDROID__)
+#include "context_egl_android.h"
 #else
 #ifdef ENABLE_EGL
 #ifdef ENABLE_WAYLAND
@@ -73,6 +75,22 @@ static void DisableBrokenExtensions(const char* gl_vendor, const char* gl_render
       GLAD_GL_EXT_disjoint_timer_query = 0;
     }
   }
+  else if (std::strstr(gl_vendor, "Qualcomm") && std::strstr(gl_renderer, "Adreno"))
+  {
+    // Framebuffer fetch appears to be broken in drivers ?? >= 464 < 502.
+    int gl_major_version = 0, gl_minor_version = 0, major_version = 0;
+    if ((std::sscanf(gl_version, "OpenGL ES %d.%d V@%d", &gl_major_version, &gl_minor_version, &major_version) == 3 &&
+         gl_major_version >= 3 && gl_minor_version >= 2 && major_version < 502))
+    {
+      Log_VerboseFmt("Disabling GL_EXT_shader_framebuffer_fetch on Adreno version {}", major_version);
+      GLAD_GL_EXT_shader_framebuffer_fetch = 0;
+      GLAD_GL_ARM_shader_framebuffer_fetch = 0;
+    }
+    else
+    {
+      Log_VerboseFmt("Keeping GL_EXT_shader_framebuffer_fetch on Adreno version {}", major_version);
+    }
+  }
 
   // If we're missing GLES 3.2, but have OES_draw_elements_base_vertex, redirect the function pointers.
   if (!glad_glDrawElementsBaseVertex && GLAD_GL_OES_draw_elements_base_vertex && !GLAD_GL_ES_VERSION_3_2)
@@ -120,6 +138,8 @@ std::unique_ptr<GL::Context> Context::Create(const WindowInfo& wi, const Version
   context = ContextWGL::Create(wi, versions_to_try, num_versions_to_try);
 #elif defined(__APPLE__)
   context = ContextAGL::Create(wi, versions_to_try, num_versions_to_try);
+#elif defined(__ANDROID__)
+  context = ContextEGLAndroid::Create(wi, versions_to_try, num_versions_to_try);
 #else
 #if defined(ENABLE_X11)
   if (wi.type == WindowInfo::Type::X11)
@@ -129,6 +149,8 @@ std::unique_ptr<GL::Context> Context::Create(const WindowInfo& wi, const Version
   if (wi.type == WindowInfo::Type::Wayland)
     context = ContextEGLWayland::Create(wi, versions_to_try, num_versions_to_try);
 #endif
+  if (wi.type == WindowInfo::Type::Surfaceless)
+    context = ContextEGL::Create(wi, versions_to_try, num_versions_to_try);
 #endif
 
   if (!context)

@@ -95,7 +95,6 @@ static void AsyncOpThreadEntryPoint(std::function<void(ProgressCallback*)> callb
 static std::unique_ptr<INISettingsInterface> s_base_settings_interface;
 static bool s_batch_mode = false;
 static bool s_is_fullscreen = false;
-static bool s_save_state_on_shutdown = false;
 static bool s_was_paused_by_focus_loss = false;
 
 static Threading::Thread s_cpu_thread;
@@ -186,7 +185,7 @@ void NoGUIHost::SetDataDirectory()
       EmuFolders::DataRoot = Path::Combine(StringUtil::WideStringToUTF8String(documents_directory), "DuckStation");
     CoTaskMemFree(documents_directory);
   }
-#elif defined(__linux__)
+#elif defined(__linux__) || defined(__FreeBSD__)
   // Use $XDG_CONFIG_HOME/duckstation if it exists.
   const char* xdg_config_home = getenv("XDG_CONFIG_HOME");
   if (xdg_config_home && Path::IsAbsolute(xdg_config_home))
@@ -323,6 +322,20 @@ void Host::ReportDebuggerMessage(const std::string_view& message)
   Log_ErrorPrintf("ReportDebuggerMessage: %.*s", static_cast<int>(message.size()), message.data());
 }
 
+std::span<const std::pair<const char*, const char*>> Host::GetAvailableLanguageList()
+{
+  return {};
+}
+
+bool Host::ChangeLanguage(const char* new_language)
+{
+  return false;
+}
+
+void Host::AddFixedInputBindings(SettingsInterface& si)
+{
+}
+
 void Host::OnInputDeviceConnected(const std::string_view& identifier, const std::string_view& device_name)
 {
   Host::AddKeyedOSDMessage(fmt::format("InputDeviceConnected-{}", identifier),
@@ -345,6 +358,12 @@ s32 Host::Internal::GetTranslatedStringImpl(const std::string_view& context, con
 
   std::memcpy(tbuf, msg.data(), msg.size());
   return static_cast<s32>(msg.size());
+}
+
+bool Host::ResourceFileExists(const char* filename)
+{
+  const std::string path(Path::Combine(EmuFolders::Resources, filename));
+  return FileSystem::FileExists(path.c_str());
 }
 
 std::optional<std::vector<u8>> Host::ReadResourceFile(const char* filename)
@@ -700,7 +719,6 @@ void Host::ReleaseRenderWindow()
 
 void Host::OnSystemStarting()
 {
-  s_save_state_on_shutdown = false;
   s_was_paused_by_focus_loss = false;
 }
 
@@ -924,6 +942,11 @@ std::optional<u32> InputManager::ConvertHostKeyboardStringToCode(const std::stri
 std::optional<std::string> InputManager::ConvertHostKeyboardCodeToString(u32 code)
 {
   return g_nogui_window->ConvertHostKeyboardCodeToString(code);
+}
+
+const char* InputManager::ConvertHostKeyboardCodeToIcon(u32 code)
+{
+  return nullptr;
 }
 
 BEGIN_HOTKEY_LIST(g_host_hotkeys)

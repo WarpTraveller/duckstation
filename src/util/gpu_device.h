@@ -443,11 +443,22 @@ public:
   // TODO: gpu crash handling on present
   using DrawIndex = u16;
 
+  enum FeatureMask : u32
+  {
+    FEATURE_MASK_DUAL_SOURCE_BLEND = (1 << 0),
+    FEATURE_MASK_FRAMEBUFFER_FETCH = (1 << 1),
+    FEATURE_MASK_TEXTURE_BUFFERS = (1 << 2),
+    FEATURE_MASK_GEOMETRY_SHADERS = (1 << 3),
+    FEATURE_MASK_TEXTURE_COPY_TO_SELF = (1 << 4),
+  };
+
   struct Features
   {
     bool dual_source_blend : 1;
+    bool framebuffer_fetch : 1;
     bool per_sample_shading : 1;
     bool noperspective_interpolation : 1;
+    bool texture_copy_to_self : 1;
     bool supports_texture_buffers : 1;
     bool texture_buffers_emulated_with_ssbo : 1;
     bool geometry_shaders : 1;
@@ -530,7 +541,7 @@ public:
   virtual RenderAPI GetRenderAPI() const = 0;
 
   bool Create(const std::string_view& adapter, const std::string_view& shader_cache_path, u32 shader_cache_version,
-              bool debug_device, bool vsync, bool threaded_presentation);
+              bool debug_device, bool vsync, bool threaded_presentation, FeatureMask disabled_features);
   void Destroy();
 
   virtual bool HasSurface() const = 0;
@@ -635,7 +646,7 @@ public:
   virtual float GetAndResetAccumulatedGPUTime();
 
 protected:
-  virtual bool CreateDevice(const std::string_view& adapter, bool threaded_presentation) = 0;
+  virtual bool CreateDevice(const std::string_view& adapter, bool threaded_presentation, FeatureMask disabled_features) = 0;
   virtual void DestroyDevice() = 0;
 
   std::string GetShaderCacheBaseName(const std::string_view& type) const;

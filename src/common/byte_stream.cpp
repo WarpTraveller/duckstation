@@ -28,11 +28,14 @@
 #ifdef _MSC_VER
 #include <malloc.h>
 #else
+#if !defined(__FreeBSD__)
 #include <alloca.h>
+#endif
 #endif
 
 Log_SetChannel(ByteStream);
 
+namespace {
 class FileByteStream : public ByteStream
 {
 public:
@@ -174,10 +177,7 @@ public:
     return true;
   }
 
-  u64 GetPosition() const override
-  {
-    return _ftelli64(m_pFile);
-  }
+  u64 GetPosition() const override { return _ftelli64(m_pFile); }
 
   u64 GetSize() const override
   {
@@ -232,10 +232,7 @@ public:
     return true;
   }
 
-  u64 GetPosition() const override
-  {
-    return static_cast<u64>(ftello(m_pFile));
-  }
+  u64 GetPosition() const override { return static_cast<u64>(ftello(m_pFile)); }
 
   u64 GetSize() const override
   {
@@ -262,15 +259,9 @@ public:
     return true;
   }
 
-  virtual bool Commit() override
-  {
-    return true;
-  }
+  virtual bool Commit() override { return true; }
 
-  virtual bool Discard() override
-  {
-    return false;
-  }
+  virtual bool Discard() override { return false; }
 
 protected:
   FILE* m_pFile;
@@ -364,10 +355,15 @@ private:
   std::string m_originalFileName;
   std::string m_temporaryFileName;
 };
+} // namespace
 
-NullByteStream::NullByteStream() {}
+NullByteStream::NullByteStream()
+{
+}
 
-NullByteStream::~NullByteStream() {}
+NullByteStream::~NullByteStream()
+{
+}
 
 bool NullByteStream::ReadByte(u8* pDestByte)
 {
@@ -456,7 +452,9 @@ MemoryByteStream::MemoryByteStream(void* pMemory, u32 MemSize)
   m_pMemory = (u8*)pMemory;
 }
 
-MemoryByteStream::~MemoryByteStream() {}
+MemoryByteStream::~MemoryByteStream()
+{
+}
 
 bool MemoryByteStream::ReadByte(u8* pDestByte)
 {
@@ -586,7 +584,9 @@ ReadOnlyMemoryByteStream::ReadOnlyMemoryByteStream(const void* pMemory, u32 MemS
   m_pMemory = reinterpret_cast<const u8*>(pMemory);
 }
 
-ReadOnlyMemoryByteStream::~ReadOnlyMemoryByteStream() {}
+ReadOnlyMemoryByteStream::~ReadOnlyMemoryByteStream()
+{
+}
 
 bool ReadOnlyMemoryByteStream::ReadByte(u8* pDestByte)
 {
@@ -1346,6 +1346,7 @@ bool ByteStream::WriteBinaryToStream(ByteStream* stream, const void* data, size_
   return stream->Write2(data, static_cast<u32>(data_length));
 }
 
+namespace {
 class ZstdCompressStream final : public ByteStream
 {
 public:
@@ -1489,12 +1490,14 @@ private:
   u8 m_input_buffer[INPUT_BUFFER_SIZE];
   u8 m_output_buffer[OUTPUT_BUFFER_SIZE];
 };
+} // namespace
 
 std::unique_ptr<ByteStream> ByteStream::CreateZstdCompressStream(ByteStream* src_stream, int compression_level)
 {
   return std::make_unique<ZstdCompressStream>(src_stream, compression_level);
 }
 
+namespace {
 class ZstdDecompressStream final : public ByteStream
 {
 public:
@@ -1556,7 +1559,7 @@ public:
     {
       const s64 skip = std::min<s64>(m_output_buffer_wpos - m_output_buffer_rpos, remaining);
       remaining -= skip;
-      m_output_buffer_wpos += static_cast<u32>(skip);
+      m_output_buffer_rpos += static_cast<u32>(skip);
       if (remaining == 0)
         return true;
       else if (!Decompress())
@@ -1643,6 +1646,7 @@ private:
   u8 m_input_buffer[INPUT_BUFFER_SIZE];
   u8 m_output_buffer[OUTPUT_BUFFER_SIZE];
 };
+} // namespace
 
 std::unique_ptr<ByteStream> ByteStream::CreateZstdDecompressStream(ByteStream* src_stream, u32 compressed_size)
 {

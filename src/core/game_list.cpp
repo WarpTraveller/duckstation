@@ -9,12 +9,12 @@
 #include "system.h"
 
 #include "util/cd_image.h"
+#include "util/http_downloader.h"
 
 #include "common/assert.h"
 #include "common/byte_stream.h"
 #include "common/file_system.h"
 #include "common/heterogeneous_containers.h"
-#include "common/http_downloader.h"
 #include "common/log.h"
 #include "common/path.h"
 #include "common/progress_callback.h"
@@ -36,9 +36,11 @@ Log_SetChannel(GameList);
 #endif
 
 namespace GameList {
+namespace {
+
 enum : u32
 {
-  GAME_LIST_CACHE_SIGNATURE = 0x45434C47,
+  GAME_LIST_CACHE_SIGNATURE = 0x45434C48,
   GAME_LIST_CACHE_VERSION = 34,
 
   PLAYED_TIME_SERIAL_LENGTH = 32,
@@ -53,6 +55,8 @@ struct PlayedTimeEntry
   std::time_t last_played_time;
   std::time_t total_played_time;
 };
+
+} // namespace
 
 using CacheMap = PreferUnorderedStringMap<Entry>;
 using PlayedTimeMap = PreferUnorderedStringMap<PlayedTimeEntry>;
@@ -212,7 +216,7 @@ bool GameList::GetDiscListEntry(const std::string& path, Entry* entry)
   System::GetGameDetailsFromImage(cdi.get(), &id, &entry->hash);
 
   // try the database first
-  const GameDatabase::Entry* dentry = GameDatabase::GetEntryForId(id);
+  const GameDatabase::Entry* dentry = GameDatabase::GetEntryForGameDetails(id, entry->hash);
   if (dentry)
   {
     // pull from database
@@ -228,6 +232,19 @@ bool GameList::GetDiscListEntry(const std::string& path, Entry* entry)
     entry->max_blocks = dentry->max_blocks;
     entry->supported_controllers = dentry->supported_controllers;
     entry->compatibility = dentry->compatibility;
+
+    if (!cdi->HasSubImages())
+    {
+      for (size_t i = 0; i < dentry->disc_set_serials.size(); i++)
+      {
+        if (dentry->disc_set_serials[i] == entry->serial)
+        {
+          entry->disc_set_name = dentry->disc_set_name;
+          entry->disc_set_index = static_cast<s8>(i);
+          break;
+        }
+      }
+    }
   }
   else
   {
@@ -314,12 +331,13 @@ bool GameList::LoadEntriesFromCache(ByteStream* stream)
 
     if (!stream->ReadU8(&type) || !stream->ReadU8(&region) || !stream->ReadSizePrefixedString(&path) ||
         !stream->ReadSizePrefixedString(&ge.serial) || !stream->ReadSizePrefixedString(&ge.title) ||
-        !stream->ReadSizePrefixedString(&ge.genre) || !stream->ReadSizePrefixedString(&ge.publisher) ||
-        !stream->ReadSizePrefixedString(&ge.developer) || !stream->ReadU64(&ge.hash) ||
-        !stream->ReadU64(&ge.total_size) || !stream->ReadU64(reinterpret_cast<u64*>(&ge.last_modified_time)) ||
-        !stream->ReadU64(&ge.release_date) || !stream->ReadU16(&ge.supported_controllers) ||
-        !stream->ReadU8(&ge.min_players) || !stream->ReadU8(&ge.max_players) || !stream->ReadU8(&ge.min_blocks) ||
-        !stream->ReadU8(&ge.max_blocks) || !stream->ReadU8(&compatibility_rating) ||
+        !stream->ReadSizePrefixedString(&ge.disc_set_name) || !stream->ReadSizePrefixedString(&ge.genre) ||
+        !stream->ReadSizePrefixedString(&ge.publisher) || !stream->ReadSizePrefixedString(&ge.developer) ||
+        !stream->ReadU64(&ge.hash) || !stream->ReadU64(&ge.total_size) ||
+        !stream->ReadU64(reinterpret_cast<u64*>(&ge.last_modified_time)) || !stream->ReadU64(&ge.release_date) ||
+        !stream->ReadU16(&ge.supported_controllers) || !stream->ReadU8(&ge.min_players) ||
+        !stream->ReadU8(&ge.max_players) || !stream->ReadU8(&ge.min_blocks) || !stream->ReadU8(&ge.max_blocks) ||
+        !stream->ReadS8(&ge.disc_set_index) || !stream->ReadU8(&compatibility_rating) ||
         region >= static_cast<u8>(DiscRegion::Count) || type >= static_cast<u8>(EntryType::Count) ||
         compatibility_rating >= static_cast<u8>(GameDatabase::CompatibilityRating::Count))
     {
@@ -350,6 +368,7 @@ bool GameList::WriteEntryToCache(const Entry* entry)
   result &= s_cache_write_stream->WriteSizePrefixedString(entry->path);
   result &= s_cache_write_stream->WriteSizePrefixedString(entry->serial);
   result &= s_cache_write_stream->WriteSizePrefixedString(entry->title);
+  result &= s_cache_write_stream->WriteSizePrefixedString(entry->disc_set_name);
   result &= s_cache_write_stream->WriteSizePrefixedString(entry->genre);
   result &= s_cache_write_stream->WriteSizePrefixedString(entry->publisher);
   result &= s_cache_write_stream->WriteSizePrefixedString(entry->developer);
@@ -362,6 +381,7 @@ bool GameList::WriteEntryToCache(const Entry* entry)
   result &= s_cache_write_stream->WriteU8(entry->max_players);
   result &= s_cache_write_stream->WriteU8(entry->min_blocks);
   result &= s_cache_write_stream->WriteU8(entry->max_blocks);
+  result &= s_cache_write_stream->WriteS8(entry->disc_set_index);
   result &= s_cache_write_stream->WriteU8(static_cast<u8>(entry->compatibility));
   return result;
 }
@@ -577,7 +597,7 @@ const GameList::Entry* GameList::GetEntryForPath(const char* path)
   return nullptr;
 }
 
-const GameList::Entry* GameList::GetEntryBySerial(const std::string_view& serial)
+const GameList::Entry* GameList::GetEntryBySerial(std::string_view serial)
 {
   for (const Entry& entry : s_entries)
   {
@@ -591,7 +611,7 @@ const GameList::Entry* GameList::GetEntryBySerial(const std::string_view& serial
   return nullptr;
 }
 
-const GameList::Entry* GameList::GetEntryBySerialAndHash(const std::string_view& serial, u64 hash)
+const GameList::Entry* GameList::GetEntryBySerialAndHash(std::string_view serial, u64 hash)
 {
   for (const Entry& entry : s_entries)
   {
@@ -600,6 +620,19 @@ const GameList::Entry* GameList::GetEntryBySerialAndHash(const std::string_view&
   }
 
   return nullptr;
+}
+
+std::vector<const GameList::Entry*> GameList::GetDiscSetMembers(std::string_view disc_set_name)
+{
+  std::vector<const Entry*> ret;
+  for (const Entry& entry : s_entries)
+  {
+    if (/*!entry.disc_set_member || */ disc_set_name != entry.disc_set_name)
+      continue;
+
+    ret.push_back(&entry);
+  }
+  return ret;
 }
 
 u32 GameList::GetEntryCount()
@@ -628,8 +661,12 @@ void GameList::Refresh(bool invalidate_cache, bool only_cache, ProgressCallback*
 
   const std::vector<std::string> excluded_paths(Host::GetBaseStringListSetting("GameList", "ExcludedPaths"));
   const std::vector<std::string> dirs(Host::GetBaseStringListSetting("GameList", "Paths"));
-  const std::vector<std::string> recursive_dirs(Host::GetBaseStringListSetting("GameList", "RecursivePaths"));
+  std::vector<std::string> recursive_dirs(Host::GetBaseStringListSetting("GameList", "RecursivePaths"));
   const PlayedTimeMap played_time(LoadPlayedTimeMap(GetPlayedTimeFile()));
+
+#ifdef __ANDROID__
+  recursive_dirs.push_back(Path::Combine(EmuFolders::DataRoot, "games"));
+#endif
 
   if (!dirs.empty() || !recursive_dirs.empty())
   {
@@ -1112,15 +1149,14 @@ bool GameList::DownloadCovers(const std::vector<std::string>& url_templates, boo
       {
         std::string url(url_template);
         if (has_title)
-          StringUtil::ReplaceAll(&url, "${title}", Common::HTTPDownloader::URLEncode(entry.title));
+          StringUtil::ReplaceAll(&url, "${title}", HTTPDownloader::URLEncode(entry.title));
         if (has_file_title)
         {
           std::string display_name(FileSystem::GetDisplayNameFromPath(entry.path));
-          StringUtil::ReplaceAll(&url, "${filetitle}",
-                                 Common::HTTPDownloader::URLEncode(Path::GetFileTitle(display_name)));
+          StringUtil::ReplaceAll(&url, "${filetitle}", HTTPDownloader::URLEncode(Path::GetFileTitle(display_name)));
         }
         if (has_serial)
-          StringUtil::ReplaceAll(&url, "${serial}", Common::HTTPDownloader::URLEncode(entry.serial));
+          StringUtil::ReplaceAll(&url, "${serial}", HTTPDownloader::URLEncode(entry.serial));
 
         download_urls.emplace_back(entry.path, std::move(url));
       }
@@ -1132,7 +1168,7 @@ bool GameList::DownloadCovers(const std::vector<std::string>& url_templates, boo
     return false;
   }
 
-  std::unique_ptr<Common::HTTPDownloader> downloader(Common::HTTPDownloader::Create());
+  std::unique_ptr<HTTPDownloader> downloader(HTTPDownloader::Create(Host::GetHTTPUserAgent()));
   if (!downloader)
   {
     progress->DisplayError("Failed to create HTTP downloader.");
@@ -1161,11 +1197,11 @@ bool GameList::DownloadCovers(const std::vector<std::string>& url_templates, boo
     }
 
     // we could actually do a few in parallel here...
-    std::string filename(Common::HTTPDownloader::URLDecode(url));
+    std::string filename(HTTPDownloader::URLDecode(url));
     downloader->CreateRequest(
       std::move(url), [use_serial, &save_callback, entry_path = std::move(entry_path), filename = std::move(filename)](
-                        s32 status_code, std::string content_type, Common::HTTPDownloader::Request::Data data) {
-        if (status_code != Common::HTTPDownloader::HTTP_OK || data.empty())
+                        s32 status_code, const std::string& content_type, HTTPDownloader::Request::Data data) {
+        if (status_code != HTTPDownloader::HTTP_STATUS_OK || data.empty())
           return;
 
         std::unique_lock lock(s_mutex);
@@ -1176,7 +1212,7 @@ bool GameList::DownloadCovers(const std::vector<std::string>& url_templates, boo
         // prefer the content type from the response for the extension
         // otherwise, if it's missing, and the request didn't have an extension.. fall back to jpegs.
         std::string template_filename;
-        std::string content_type_extension(Common::HTTPDownloader::GetExtensionForContentType(content_type));
+        std::string content_type_extension(HTTPDownloader::GetExtensionForContentType(content_type));
 
         // don't treat the domain name as an extension..
         const std::string::size_type last_slash = filename.find('/');

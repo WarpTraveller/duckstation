@@ -7,7 +7,7 @@
 #include "mainwindow.h"
 #include "qtutils.h"
 #include "scmversion/scmversion.h"
-#include "settingsdialog.h"
+#include "settingswindow.h"
 #include "settingwidgetbinder.h"
 
 const char* GeneralSettingsWidget::THEME_NAMES[] = {
@@ -25,7 +25,7 @@ const char* GeneralSettingsWidget::THEME_VALUES[] = {
 
 const char* GeneralSettingsWidget::DEFAULT_THEME_NAME = "darkfusion";
 
-GeneralSettingsWidget::GeneralSettingsWidget(SettingsDialog* dialog, QWidget* parent)
+GeneralSettingsWidget::GeneralSettingsWidget(SettingsWindow* dialog, QWidget* parent)
   : QWidget(parent), m_dialog(dialog)
 {
   SettingsInterface* sif = dialog->getSettingsInterface();
@@ -54,6 +54,7 @@ GeneralSettingsWidget::GeneralSettingsWidget(SettingsDialog* dialog, QWidget* pa
                                                Settings::DEFAULT_SAVE_STATE_BACKUPS);
   SettingWidgetBinder::BindWidgetToBoolSetting(sif, m_ui.compressSaveStates, "Main", "CompressSaveStates",
                                                Settings::DEFAULT_SAVE_STATE_COMPRESSION);
+  SettingWidgetBinder::BindWidgetToBoolSetting(sif, m_ui.enableDiscordPresence, "Main", "EnableDiscordPresence", false);
   connect(m_ui.renderToSeparateWindow, &QCheckBox::stateChanged, this,
           &GeneralSettingsWidget::onRenderToSeparateWindowChanged);
 
@@ -98,19 +99,9 @@ GeneralSettingsWidget::GeneralSettingsWidget(SettingsDialog* dialog, QWidget* pa
        "leave this option enabled except when testing enhancements with incompatible games."));
   dialog->registerWidgetHelp(m_ui.autoLoadCheats, tr("Automatically Load Cheats"), tr("Unchecked"),
                              tr("Automatically loads and applies cheats on game start."));
+  dialog->registerWidgetHelp(m_ui.enableDiscordPresence, tr("Enable Discord Presence"), tr("Unchecked"),
+                             tr("Shows the game you are currently playing as part of your profile in Discord."));
 
-#ifdef ENABLE_DISCORD_PRESENCE
-  {
-    SettingWidgetBinder::BindWidgetToBoolSetting(sif, m_ui.enableDiscordPresence, "Main", "EnableDiscordPresence",
-                                                 false);
-    dialog->registerWidgetHelp(m_ui.enableDiscordPresence, tr("Enable Discord Presence"), tr("Unchecked"),
-                               tr("Shows the game you are currently playing as part of your profile in Discord."));
-  }
-#else
-  {
-    m_ui.enableDiscordPresence->setEnabled(false);
-  }
-#endif
   if (!m_dialog->isPerGameSettings() && AutoUpdaterDialog::isSupported())
   {
     SettingWidgetBinder::BindWidgetToBoolSetting(sif, m_ui.autoUpdateEnabled, "AutoUpdater", "CheckAtStartup", true);

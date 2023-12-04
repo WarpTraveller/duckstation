@@ -21,6 +21,7 @@ on:
 jobs:
   windows-build:
     runs-on: windows-2022
+    timeout-minutes: 120
     steps:
     - uses: actions/checkout@v2.3.1
       with:
@@ -112,6 +113,7 @@ jobs:
 
   windows-arm64-build:
     runs-on: windows-2022
+    timeout-minutes: 120
     steps:
     - uses: actions/checkout@v2.3.1
       with:
@@ -203,6 +205,7 @@ jobs:
 
   linux-build:
     runs-on: ubuntu-22.04
+    timeout-minutes: 120
     steps:
     # Work around https://github.com/actions/runner-images/issues/8659
     - name: Remove GCC 13 from runner image
@@ -278,6 +281,7 @@ jobs:
 
   linux-flatpak-build:
     runs-on: ubuntu-22.04
+    timeout-minutes: 120
     steps:
     - uses: actions/checkout@v3
       with:
@@ -321,10 +325,16 @@ jobs:
 
   macos-build:
     runs-on: macos-11
+    timeout-minutes: 120
     steps:
     - uses: actions/checkout@v2.3.1
       with:
         fetch-depth: 0
+
+    # Python 3.12 removed distutils, used by MoltenVK -> glslang.
+    - uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
 
     - name: Install packages
       shell: bash
@@ -363,7 +373,11 @@ jobs:
       run: |
         mkdir build
         cd build
-        ../scripts/make-universal-macos-binary.sh ..
+        export MACOSX_DEPLOYMENT_TARGET=11.0
+        cmake -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64" -DCMAKE_BUILD_TYPE=Release -DENABLE_OPENGL=OFF -DCMAKE_PREFIX_PATH="$HOME/deps" -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON -G Ninja ..
+        cmake --build . --parallel
+        mv bin/DuckStation.app .
+        codesign -s - --deep -f -v DuckStation.app
         zip -r duckstation-mac-release.zip DuckStation.app/
 
     - name: Upload macOS .app

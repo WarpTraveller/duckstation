@@ -5,7 +5,7 @@
 #include "achievementlogindialog.h"
 #include "mainwindow.h"
 #include "qtutils.h"
-#include "settingsdialog.h"
+#include "settingswindow.h"
 #include "settingwidgetbinder.h"
 
 #include "core/achievements.h"
@@ -16,7 +16,7 @@
 #include <QtCore/QDateTime>
 #include <QtWidgets/QMessageBox>
 
-AchievementSettingsWidget::AchievementSettingsWidget(SettingsDialog* dialog, QWidget* parent)
+AchievementSettingsWidget::AchievementSettingsWidget(SettingsWindow* dialog, QWidget* parent)
   : QWidget(parent), m_dialog(dialog)
 {
   SettingsInterface* sif = dialog->getSettingsInterface();
@@ -210,6 +210,19 @@ void AchievementSettingsWidget::onLoginLogoutPressed()
     return;
 
   updateLoginState();
+
+  // Login can enable achievements/hardcore.
+  if (!m_ui.enable->isChecked() && Host::GetBaseBoolSettingValue("Cheevos", "Enabled", false))
+  {
+    QSignalBlocker sb(m_ui.enable);
+    m_ui.enable->setChecked(true);
+    updateEnableState();
+  }
+  if (!m_ui.hardcoreMode->isChecked() && Host::GetBaseBoolSettingValue("Cheevos", "ChallengeMode", false))
+  {
+    QSignalBlocker sb(m_ui.hardcoreMode);
+    m_ui.hardcoreMode->setChecked(true);
+  }
 }
 
 void AchievementSettingsWidget::onViewProfilePressed()

@@ -96,8 +96,8 @@ static std::optional<ExtendedSaveStateInfo> InternalGetExtendedSaveStateInfo(Byt
 
 static bool LoadEXE(const char* filename);
 
-static std::string GetExecutableNameForImage(ISOReader& iso, bool strip_subdirectories);
-static bool ReadExecutableFromImage(ISOReader& iso, std::string* out_executable_name,
+static std::string GetExecutableNameForImage(IsoReader& iso, bool strip_subdirectories);
+static bool ReadExecutableFromImage(IsoReader& iso, std::string* out_executable_name,
                                     std::vector<u8>* out_executable_data);
 
 static bool LoadBIOS(const std::string& override_bios_path);
@@ -256,8 +256,10 @@ void System::Internal::ProcessStartup()
   if (g_settings.achievements_enabled)
     Achievements::Initialize();
 
+#ifdef ENABLE_DISCORD_PRESENCE
   if (g_settings.enable_discord_presence)
     InitializeDiscordPresence();
+#endif
 }
 
 void System::Internal::ProcessShutdown()
@@ -559,7 +561,7 @@ std::string System::GetGameHashId(GameHash hash)
 
 bool System::GetGameDetailsFromImage(CDImage* cdi, std::string* out_id, GameHash* out_hash)
 {
-  ISOReader iso;
+  IsoReader iso;
   if (!iso.Open(cdi, 1))
   {
     if (out_id)
@@ -587,7 +589,7 @@ bool System::GetGameDetailsFromImage(CDImage* cdi, std::string* out_id, GameHash
   XXH64_reset(state, 0x4242D00C);
   XXH64_update(state, exe_name.c_str(), exe_name.size());
   XXH64_update(state, exe_buffer.data(), exe_buffer.size());
-  XXH64_update(state, &iso.GetPVD(), sizeof(ISOReader::ISOPrimaryVolumeDescriptor));
+  XXH64_update(state, &iso.GetPVD(), sizeof(IsoReader::ISOPrimaryVolumeDescriptor));
   XXH64_update(state, &track_1_length, sizeof(track_1_length));
   const GameHash hash = XXH64_digest(state);
   XXH64_freeState(state);
@@ -634,7 +636,7 @@ bool System::GetGameDetailsFromImage(CDImage* cdi, std::string* out_id, GameHash
   return true;
 }
 
-std::string System::GetExecutableNameForImage(ISOReader& iso, bool strip_subdirectories)
+std::string System::GetExecutableNameForImage(IsoReader& iso, bool strip_subdirectories)
 {
   // Read SYSTEM.CNF
   std::vector<u8> system_cnf_data;
@@ -726,7 +728,7 @@ std::string System::GetExecutableNameForImage(ISOReader& iso, bool strip_subdire
 
 std::string System::GetExecutableNameForImage(CDImage* cdi, bool strip_subdirectories)
 {
-  ISOReader iso;
+  IsoReader iso;
   if (!iso.Open(cdi, 1))
     return {};
 
@@ -736,14 +738,14 @@ std::string System::GetExecutableNameForImage(CDImage* cdi, bool strip_subdirect
 bool System::ReadExecutableFromImage(CDImage* cdi, std::string* out_executable_name,
                                      std::vector<u8>* out_executable_data)
 {
-  ISOReader iso;
+  IsoReader iso;
   if (!iso.Open(cdi, 1))
     return false;
 
   return ReadExecutableFromImage(iso, out_executable_name, out_executable_data);
 }
 
-bool System::ReadExecutableFromImage(ISOReader& iso, std::string* out_executable_name,
+bool System::ReadExecutableFromImage(IsoReader& iso, std::string* out_executable_name,
                                      std::vector<u8>* out_executable_data)
 {
   const std::string executable_path = GetExecutableNameForImage(iso, false);
@@ -813,7 +815,7 @@ DiscRegion System::GetRegionForImage(CDImage* cdi)
   if (system_area_region != DiscRegion::Other)
     return system_area_region;
 
-  ISOReader iso;
+  IsoReader iso;
   if (!iso.Open(cdi, 1))
     return DiscRegion::NonPS1;
 
@@ -1131,9 +1133,13 @@ bool System::LoadState(const char* filename)
   if (!IsValid())
     return false;
 
-  if (Achievements::IsHardcoreModeActive() &&
-      !Achievements::ConfirmHardcoreModeDisable(TRANSLATE("Achievements", "Loading state")))
+  if (Achievements::IsHardcoreModeActive())
   {
+    Achievements::ConfirmHardcoreModeDisableAsync(TRANSLATE("Achievements", "Loading state"),
+                                                  [filename = std::string(filename)](bool approved) {
+                                                    if (approved)
+                                                      LoadState(filename.c_str());
+                                                  });
     return false;
   }
 
@@ -1349,13 +1355,35 @@ bool System::BootSystem(SystemBootParameters parameters)
   }
 
   // Check for resuming with hardcore mode.
-  if (!parameters.save_state.empty() && Achievements::IsHardcoreModeActive() &&
-      !Achievements::ConfirmHardcoreModeDisable(TRANSLATE("Achievements", "Resuming state")))
+  if (parameters.disable_achievements_hardcore_mode)
+    Achievements::DisableHardcoreMode();
+  if (!parameters.save_state.empty() && Achievements::IsHardcoreModeActive())
   {
-    s_state = State::Shutdown;
-    ClearRunningGame();
-    Host::OnSystemDestroyed();
-    return false;
+    bool cancelled;
+    if (FullscreenUI::IsInitialized())
+    {
+      Achievements::ConfirmHardcoreModeDisableAsync(TRANSLATE("Achievements", "Resuming state"),
+                                                    [parameters = std::move(parameters)](bool approved) mutable {
+                                                      if (approved)
+                                                      {
+                                                        parameters.disable_achievements_hardcore_mode = true;
+                                                        BootSystem(std::move(parameters));
+                                                      }
+                                                    });
+      cancelled = true;
+    }
+    else
+    {
+      cancelled = !Achievements::ConfirmHardcoreModeDisable(TRANSLATE("Achievements", "Resuming state"));
+    }
+
+    if (cancelled)
+    {
+      s_state = State::Shutdown;
+      ClearRunningGame();
+      Host::OnSystemDestroyed();
+      return false;
+    }
   }
 
   // Load BIOS image.
@@ -2697,8 +2725,14 @@ void System::SetRewindState(bool enabled)
     return;
   }
 
-  if (Achievements::IsHardcoreModeActive() && !Achievements::ConfirmHardcoreModeDisable("Rewinding"))
+  if (Achievements::IsHardcoreModeActive() && enabled)
+  {
+    Achievements::ConfirmHardcoreModeDisableAsync("Rewinding", [](bool approved) {
+      if (approved)
+        SetRewindState(true);
+    });
     return;
+  }
 
   System::SetRewinding(enabled);
   UpdateSpeedLimiterState();
@@ -2709,8 +2743,14 @@ void System::DoFrameStep()
   if (!IsValid())
     return;
 
-  if (Achievements::IsHardcoreModeActive() && !Achievements::ConfirmHardcoreModeDisable("Frame stepping"))
+  if (Achievements::IsHardcoreModeActive())
+  {
+    Achievements::ConfirmHardcoreModeDisableAsync("Frame stepping", [](bool approved) {
+      if (approved)
+        DoFrameStep();
+    });
     return;
+  }
 
   s_frame_step_request = true;
   PauseSystem(false);
@@ -2721,8 +2761,11 @@ void System::DoToggleCheats()
   if (!System::IsValid())
     return;
 
-  if (Achievements::IsHardcoreModeActive() && !Achievements::ConfirmHardcoreModeDisable("Toggling cheats"))
+  if (Achievements::IsHardcoreModeActive())
+  {
+    Achievements::ConfirmHardcoreModeDisableAsync("Toggling cheats", [](bool approved) { DoToggleCheats(); });
     return;
+  }
 
   CheatList* cl = GetCheatList();
   if (!cl)
@@ -3240,25 +3283,29 @@ bool System::InsertMedia(const char* path)
   std::unique_ptr<CDImage> image = CDImage::Open(path, g_settings.cdrom_load_image_patches, &error);
   if (!image)
   {
-    Host::AddFormattedOSDMessage(10.0f, TRANSLATE("OSDMessage", "Failed to open disc image '%s': %s."), path,
-                                 error.GetDescription().c_str());
+    Host::AddIconOSDMessage(
+      "DiscInserted", ICON_FA_COMPACT_DISC,
+      fmt::format(TRANSLATE_FS("OSDMessage", "Failed to open disc image '{}': {}."), path, error.GetDescription()),
+      Host::OSD_ERROR_DURATION);
     return false;
   }
 
   const DiscRegion region = GetRegionForImage(image.get());
   UpdateRunningGame(path, image.get(), false);
   CDROM::InsertMedia(std::move(image), region);
-  Log_InfoPrintf("Inserted media from %s (%s, %s)", s_running_game_path.c_str(), s_running_game_serial.c_str(),
-                 s_running_game_title.c_str());
+  Log_InfoFmt("Inserted media from {} ({}, {})", s_running_game_path, s_running_game_serial, s_running_game_title);
   if (g_settings.cdrom_load_image_to_ram)
     CDROM::PrecacheMedia();
 
-  Host::AddFormattedOSDMessage(10.0f, TRANSLATE("OSDMessage", "Inserted disc '%s' (%s)."), s_running_game_title.c_str(),
-                               s_running_game_serial.c_str());
+  Host::AddIconOSDMessage(
+    "DiscInserted", ICON_FA_COMPACT_DISC,
+    fmt::format(TRANSLATE_FS("OSDMessage", "Inserted disc '{}' ({})."), s_running_game_title, s_running_game_serial),
+    Host::OSD_INFO_DURATION);
 
   if (g_settings.HasAnyPerGameMemoryCards())
   {
-    Host::AddOSDMessage(TRANSLATE_STR("System", "Game changed, reloading memory cards."), 10.0f);
+    Host::AddIconOSDMessage("ReloadMemoryCardsFromGameChange", ICON_FA_SD_CARD,
+                            TRANSLATE_STR("System", "Game changed, reloading memory cards."), Host::OSD_INFO_DURATION);
     UpdatePerGameMemoryCards();
   }
 
@@ -3299,7 +3346,7 @@ void System::UpdateRunningGame(const char* path, CDImage* image, bool booting)
       std::string id;
       GetGameDetailsFromImage(image, &id, &s_running_game_hash);
 
-      s_running_game_entry = GameDatabase::GetEntryForId(id);
+      s_running_game_entry = GameDatabase::GetEntryForGameDetails(id, s_running_game_hash);
       if (s_running_game_entry)
       {
         s_running_game_serial = s_running_game_entry->serial;
@@ -3478,15 +3525,24 @@ void System::CheckForSettingsChanges(const Settings& old_settings)
 {
   if (IsValid() && (g_settings.gpu_renderer != old_settings.gpu_renderer ||
                     g_settings.gpu_use_debug_device != old_settings.gpu_use_debug_device ||
-                    g_settings.gpu_threaded_presentation != old_settings.gpu_threaded_presentation))
+                    g_settings.gpu_threaded_presentation != old_settings.gpu_threaded_presentation ||
+                    g_settings.gpu_disable_shader_cache != old_settings.gpu_disable_shader_cache ||
+                    g_settings.gpu_disable_dual_source_blend != old_settings.gpu_disable_dual_source_blend ||
+                    g_settings.gpu_disable_framebuffer_fetch != old_settings.gpu_disable_framebuffer_fetch))
   {
     // if debug device/threaded presentation change, we need to recreate the whole display
-    const bool recreate_device = (g_settings.gpu_use_debug_device != old_settings.gpu_use_debug_device ||
-                                  g_settings.gpu_threaded_presentation != old_settings.gpu_threaded_presentation);
+    const bool recreate_device =
+      (g_settings.gpu_use_debug_device != old_settings.gpu_use_debug_device ||
+       g_settings.gpu_threaded_presentation != old_settings.gpu_threaded_presentation ||
+       g_settings.gpu_disable_shader_cache != old_settings.gpu_disable_shader_cache ||
+       g_settings.gpu_disable_dual_source_blend != old_settings.gpu_disable_dual_source_blend ||
+       g_settings.gpu_disable_framebuffer_fetch != old_settings.gpu_disable_framebuffer_fetch);
 
-    Host::AddFormattedOSDMessage(5.0f, TRANSLATE("OSDMessage", "Switching to %s%s GPU renderer."),
-                                 Settings::GetRendererName(g_settings.gpu_renderer),
-                                 g_settings.gpu_use_debug_device ? " (debug)" : "");
+    Host::AddIconOSDMessage("RendererSwitch", ICON_FA_PAINT_ROLLER,
+                            fmt::format(TRANSLATE_FS("OSDMessage", "Switching to {}{} GPU renderer."),
+                                        Settings::GetRendererName(g_settings.gpu_renderer),
+                                        g_settings.gpu_use_debug_device ? " (debug)" : ""),
+                            Host::OSD_INFO_DURATION);
     RecreateGPU(g_settings.gpu_renderer, recreate_device);
   }
 
@@ -3508,8 +3564,10 @@ void System::CheckForSettingsChanges(const Settings& old_settings)
     {
       if (g_settings.audio_backend != old_settings.audio_backend)
       {
-        Host::AddFormattedOSDMessage(5.0f, TRANSLATE("OSDMessage", "Switching to %s audio backend."),
-                                     Settings::GetAudioBackendName(g_settings.audio_backend));
+        Host::AddIconOSDMessage("AudioBackendSwitch", ICON_FA_HEADPHONES,
+                                fmt::format(TRANSLATE_FS("OSDMessage", "Switching to {} audio backend."),
+                                            Settings::GetAudioBackendName(g_settings.audio_backend)),
+                                Host::OSD_INFO_DURATION);
       }
 
       SPU::RecreateOutputStream();
@@ -3530,10 +3588,11 @@ void System::CheckForSettingsChanges(const Settings& old_settings)
     if (g_settings.cpu_execution_mode != old_settings.cpu_execution_mode ||
         g_settings.cpu_fastmem_mode != old_settings.cpu_fastmem_mode)
     {
-      Host::AddOSDMessage(fmt::format(TRANSLATE_FS("OSDMessage", "Switching to {} CPU execution mode."),
-                                      TRANSLATE_SV("CPUExecutionMode", Settings::GetCPUExecutionModeDisplayName(
-                                                                         g_settings.cpu_execution_mode))),
-                          5.0f);
+      Host::AddIconOSDMessage("CPUExecutionModeSwitch", ICON_FA_MICROCHIP,
+                              fmt::format(TRANSLATE_FS("OSDMessage", "Switching to {} CPU execution mode."),
+                                          TRANSLATE_SV("CPUExecutionMode", Settings::GetCPUExecutionModeDisplayName(
+                                                                             g_settings.cpu_execution_mode))),
+                              Host::OSD_INFO_DURATION);
       CPU::ExecutionModeChanged();
       if (old_settings.cpu_execution_mode != CPUExecutionMode::Interpreter)
         CPU::CodeCache::Shutdown();
@@ -3548,7 +3607,9 @@ void System::CheckForSettingsChanges(const Settings& old_settings)
          g_settings.cpu_recompiler_icache != old_settings.cpu_recompiler_icache ||
          g_settings.bios_tty_logging != old_settings.bios_tty_logging))
     {
-      Host::AddOSDMessage(TRANSLATE_STR("OSDMessage", "Recompiler options changed, flushing all blocks."), 5.0f);
+      Host::AddIconOSDMessage("CPUFlushAllBlocks", ICON_FA_MICROCHIP,
+                              TRANSLATE_STR("OSDMessage", "Recompiler options changed, flushing all blocks."),
+                              Host::OSD_INFO_DURATION);
       CPU::ExecutionModeChanged();
       CPU::CodeCache::Reset();
 
@@ -3700,6 +3761,7 @@ void System::CheckForSettingsChanges(const Settings& old_settings)
 
   FullscreenUI::CheckForConfigChanges(old_settings);
 
+#ifdef ENABLE_DISCORD_PRESENCE
   if (g_settings.enable_discord_presence != old_settings.enable_discord_presence)
   {
     if (g_settings.enable_discord_presence)
@@ -3707,6 +3769,7 @@ void System::CheckForSettingsChanges(const Settings& old_settings)
     else
       ShutdownDiscordPresence();
   }
+#endif
 
   if (g_settings.log_level != old_settings.log_level || g_settings.log_filter != old_settings.log_filter ||
       g_settings.log_timestamps != old_settings.log_timestamps ||
@@ -3901,6 +3964,7 @@ void System::DoRewind()
 
   InvalidateDisplay();
   Host::PumpMessagesOnCPUThread();
+  Internal::IdlePollUpdate();
 
   Throttle();
 }

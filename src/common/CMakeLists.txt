@@ -23,8 +23,6 @@ add_library(common
   hash_combine.h
   heap_array.h
   heterogeneous_containers.h
-  http_downloader.cpp
-  http_downloader.h
   layered_settings_interface.cpp
   layered_settings_interface.h
   log.cpp
@@ -51,8 +49,6 @@ add_library(common
   small_string.h
   string_util.cpp
   string_util.h
-  thirdparty/thread_pool.cpp
-  thirdparty/thread_pool.h
   threading.cpp
   threading.h
   timer.cpp
@@ -67,21 +63,19 @@ target_link_libraries(common PRIVATE stb zlib minizip Zstd::Zstd "${CMAKE_DL_LIB
 
 if(WIN32)
   target_sources(common PRIVATE
-    http_downloader_winhttp.cpp
-    http_downloader_winhttp.h
     thirdparty/StackWalker.cpp
     thirdparty/StackWalker.h
     windows_headers.h
   )
-  target_link_libraries(common PRIVATE winhttp.lib OneCore.lib)
+  target_link_libraries(common PRIVATE OneCore.lib)
 endif()
 
 if(MSVC)
-  if(${CPU_ARCH} STREQUAL "x64")
+  if(CPU_ARCH_X64)
     enable_language(ASM_MASM)
     target_sources(common PRIVATE fastjmp_x86.asm)
     set_source_files_properties(fastjmp_x86.asm PROPERTIES COMPILE_FLAGS "/D_M_X86_64")
-  elseif(${CPU_ARCH} STREQUAL "aarch32" OR ${CPU_ARCH} STREQUAL "aarch64")
+  elseif(CPU_ARCH_ARM32 OR CPU_ARCH_ARM64)
     enable_language(ASM_MARMASM)
     target_sources(common PRIVATE fastjmp_arm.asm)
   endif()
@@ -98,19 +92,9 @@ if(APPLE)
   target_link_libraries(common PRIVATE ${COCOA_LIBRARY})
 endif()
 
-if(NOT WIN32 AND NOT ANDROID)
-  target_sources(common PRIVATE
-    http_downloader_curl.cpp
-    http_downloader_curl.h
-  )
-  target_link_libraries(common PRIVATE
-    CURL::libcurl
-  )
-
-  if(LIBBACKTRACE_FOUND)
-    target_compile_definitions(common PRIVATE "-DENABLE_LIBBACKTRACE=1")
-    target_link_libraries(common PRIVATE libbacktrace::libbacktrace)
-  endif()
+if(NOT WIN32 AND NOT ANDROID AND LIBBACKTRACE_FOUND)
+  target_compile_definitions(common PRIVATE "-DENABLE_LIBBACKTRACE=1")
+  target_link_libraries(common PRIVATE libbacktrace::libbacktrace)
 endif()
 
 if(ANDROID)
